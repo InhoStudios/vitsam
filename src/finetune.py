@@ -1,3 +1,5 @@
+# link to local segment_anything instead of installed segment_anything
+
 # do all imports
 import numpy as np
 import matplotlib.pyplot as plt
@@ -89,7 +91,8 @@ for epoch in range(num_epochs):
         optimizer.step()
         epoch_loss += loss.item()
 
-    epoch_loss /= step
+    if (step != 0):
+        epoch_loss /= step
     losses.append(epoch_loss)
     print(f'EPOCH: {epoch}, Loss: {epoch_loss}')
     # save latest model checkpoint
