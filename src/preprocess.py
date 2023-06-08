@@ -12,8 +12,8 @@ from segment_anything import sam_model_registry
 from segment_anything.utils.transforms import ResizeLongestSide
 
 # set up global variables
-img_path = "../data/gsa_train_test_split/train/images"
-gt_path = "../data/gsa_train_test_split/train/labels"
+img_path = "../data/training_images/train/images"
+gt_path = "../data/training_images/train/labels"
 
 npz_path = "../data/processed_npz"
 data_name = "processed_data"
