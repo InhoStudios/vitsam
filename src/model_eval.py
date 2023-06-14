@@ -41,7 +41,9 @@ label_id = 255
 
 default_sam = sam_model_registry[model_type](checkpoint=checkpoint)
 default_sam_predictor = SamPredictor(default_sam)
+default_sam.to(device=device)
 finetuned_sam = sam_model_registry[model_type](checkpoint=finetuned_checkpoint)
+finetuned_sam.to(device=device)
 
 def create_annotation_mask(anns):
     if len(anns) == 0:
@@ -124,7 +126,7 @@ def predict_image(image, mask):
 
         box_torch = torch.as_tensor(bbox, dtype=torch.float, device=device)
 
-        if (len(box_torch.shape == 2)):
+        if (len(box_torch.shape) == 2):
             box_torch = box_torch[:, None, :]
 
         sparse_embeddings, dense_embeddings = finetuned_sam.prompt_encoder(
@@ -150,15 +152,17 @@ def predict_image(image, mask):
 
 def get_dice_score(pred_mask, ground_truth):
     seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
-    loss = seg_loss(pred_mask, torch.tensor(ground_truth[None, :, :]).long())
+    print(pred_mask.shape, ground_truth.shape)
+    loss = seg_loss(torch.tensor(pred_mask).float(), torch.tensor(ground_truth).float())
     return loss.item()
 
 def get_jaccard_score(pred_mask, ground_truth):
-    seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
-    loss = seg_loss(pred_mask, torch.tensor(ground_truth[None, :, :]).long(), jaccard=True)
+    seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean', jaccard=True)
+    loss = seg_loss(torch.tensor(pred_mask).float(), torch.tensor(ground_truth).float())
     return loss.item()
 
 if (__name__ == "__main__"):
+    # compute scores for all images
     gt_names = sorted(os.listdir(ts_gt_path))
     finetuned_dice = 0
     finetuned_jaccard = 0
@@ -169,9 +173,14 @@ if (__name__ == "__main__"):
         def_seg, ft_seg = predict_image(im, gt)
         finetuned_dice += get_dice_score(ft_seg, gt)
         finetuned_jaccard += get_jaccard_score(ft_seg, gt)
-        def_dice += get_dice_score(def_seg, gt)
-        def_jaccard += get_jaccard_score(def_jaccard, gt)
+        def_dice += get_dice_score(def_seg, gt[None, :, :])
+        def_jaccard += get_jaccard_score(def_seg, gt[None, :, :])
+    # create masks for all images
+    def_dice /= len(gt_names)
+    def_jaccard /= len(gt_names)
+    finetuned_dice /= len(gt_names)
+    finetuned_jaccard /= len(gt_names)
     
     print(f"For all test and train images: \n",
-        "Default ViT-B Model: {def_jaccard} (Jaccard), {def_dice} (Dice)\n",
-        "Finetuned: {finetuned_jaccard} (Jaccard), {finetuned_dice} (Dice)")
+        f"Default ViT-B Model: {def_jaccard} (Jaccard), {def_dice} (Dice)\n",
+        f"Finetuned: {finetuned_jaccard} (Jaccard), {finetuned_dice} (Dice)")

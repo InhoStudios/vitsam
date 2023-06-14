@@ -40,7 +40,7 @@ task_name = "vitsam"
 # prepare SAM model
 model_type = "vit_b"
 checkpoint = "../data/sam_vit_b_01ec64.pth"
-device = "cuda:0"
+device = "cuda"
 model_save_path = join(work_dir, task_name)
 os.makedirs(model_save_path, exist_ok=True)
 sam_model = sam_model_registry[model_type](checkpoint=checkpoint).to(device)

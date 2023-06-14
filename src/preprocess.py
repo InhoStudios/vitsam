@@ -38,71 +38,71 @@ sam_model = sam_model_registry[model_type](checkpoint=checkpoint).to(device)
 
 def augment(image, ground_truth):
     num_img = 0
-    for i in range(10):
+    for i in range(15):
         # random rotation
         im, gt = ran_scale(image, ground_truth)
         # random flipping
         for j in range(10):
             im, gt = ran_flip(im, gt)
-            # random rotation
-            for k in range(10):
-                im, gt = ran_rotate(im, gt)
-                # random cropping
-                for l in range(15):
-                    im, gt = ran_crop(im, gt)
-                    if (np.sum(gt) < 100):
-                        l -= 1
-                        print("Not enough mask pixels, ", l)
-                        continue
-                    # ensure training images are the right size, rescale if necessary
-                    im = transform.resize(
-                        im,
-                        (image_size, image_size),
-                        order=3,
-                        preserve_range=True,
-                        mode="constant",
-                        anti_aliasing=True
-                    )
-                    gt = transform.resize(
-                        gt == label_id,
-                        (image_size, image_size),
-                        order=0,
-                        preserve_range=True,
-                        mode="constant"
-                    )
-                    # change data type
-                    im = np.uint8(im)
-                    gt = np.uint8(gt)
+            # # random rotation
+            # for k in range(10):
+            #     im, gt = ran_rotate(im, gt)
+            # random cropping
+            for k in range(100):
+                im, gt = ran_crop(im, gt)
+                if (np.sum(gt) < 100):
+                    k -= 2
+                    # print("Not enough mask pixels (", np.sum(gt), "), resetting to", l)
+                    continue
+                # ensure training images are the right size, rescale if necessary
+                im = transform.resize(
+                    im,
+                    (image_size, image_size),
+                    order=3,
+                    preserve_range=True,
+                    mode="constant",
+                    anti_aliasing=True
+                )
+                gt = transform.resize(
+                    gt == label_id,
+                    (image_size, image_size),
+                    order=0,
+                    preserve_range=True,
+                    mode="constant"
+                )
+                # change data type
+                im = np.uint8(im)
+                gt = np.uint8(gt)
 
-                    sam_transform = ResizeLongestSide(sam_model.image_encoder.img_size)
-                    resize_img = sam_transform.apply_image(im)
-                    resize_img_tensor = torch.as_tensor(resize_img.transpose(2, 0, 1)).to(device)
+                sam_transform = ResizeLongestSide(sam_model.image_encoder.img_size)
+                resize_img = sam_transform.apply_image(im)
+                resize_img_tensor = torch.as_tensor(resize_img.transpose(2, 0, 1)).to(device)
+                
+                input_image = sam_model.preprocess(
+                    resize_img_tensor[None, :, :, :]
+                )
+
+                assert input_image.shape == (
+                    1,
+                    3,
+                    sam_model.image_encoder.img_size,
+                    sam_model.image_encoder.img_size,
+                ), "input image should be resized by 1024 * 1024"
+
+                imgs.append(im)
+                gts.append(gt)
+                num_img += 1
+
+                with torch.no_grad():
+                    embedding = sam_model.image_encoder(input_image)
+                    img_embeddings.append(embedding.cpu().numpy()[0])
                     
-                    input_image = sam_model.preprocess(
-                        resize_img_tensor[None, :, :, :]
-                    )
-
-                    assert input_image.shape == (
-                        1,
-                        3,
-                        sam_model.image_encoder.img_size,
-                        sam_model.image_encoder.img_size,
-                    ), "input image should be resized by 1024 * 1024"
-
-                    imgs.append(im)
-                    gts.append(gt)
-                    num_img += 1
-
-                    with torch.no_grad():
-                        embedding = sam_model.image_encoder(input_image)
-                        img_embeddings.append(embedding.cpu().numpy()[0])
-                        
         print(f"Batch {i} complete, total images so far: {num_img}")
 
 def ran_flip(image, ground_truth):
     choice = [1, -1]
-    xscale = random.choice(choice)
-    yscale = random.choice(choice)
+    xscale = np.random.choice(choice)
+    yscale = np.random.choice(choice)
     return image[::xscale, ::yscale, :], ground_truth[::xscale, ::yscale]
 
 def ran_rotate(image, ground_truth):
@@ -126,7 +126,7 @@ def ran_rotate(image, ground_truth):
     return ret_img, ret_gt
 
 def ran_scale(image, ground_truth):
-    scale = random.uniform(0.75, 2.0)
+    scale = random.uniform(0.2, 1.5)
     ret_img = transform.rescale(
         image,
         scale=scale,
@@ -147,6 +147,8 @@ def ran_scale(image, ground_truth):
     return ret_img, ret_gt
 
 def ran_crop(image, ground_truth):
+    if (image.shape[0] < image_size or image.shape[1] < image_size):
+        return image, ground_truth
     yy = random.randint(0, image.shape[0] - image_size)
     xx = random.randint(0, image.shape[1] - image_size)
     ey = yy + image_size
