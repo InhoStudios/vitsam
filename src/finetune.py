@@ -35,7 +35,7 @@ for img_embed, gt2D, bboxes in val_dataloader:
 
 # set up model for fine-tuning
 npz_tr_path = "../data/processed_npz_vit_b"
-work_dir = "../model"
+work_dir = "/scratch/st-tklee-1/ndsz/model"
 task_name = "vitsam"
 # prepare SAM model
 model_type = "vit_b"

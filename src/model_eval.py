@@ -17,6 +17,7 @@ from utils.SurfaceDice import compute_dice_coefficient
 from npzdataset import NpzDataset
 
 from skimage import io, transform
+import cv2
 
 torch.manual_seed(2023)
 np.random.seed(2023)
@@ -161,6 +162,17 @@ def get_jaccard_score(pred_mask, ground_truth):
     loss = seg_loss(torch.tensor(pred_mask).float(), torch.tensor(ground_truth).float())
     return loss.item()
 
+def get_mask_contours(mask, image):
+    print(type(mask), mask.shape)
+    print(mask.dtype)
+
+    mask = mask.astype(np.uint8)
+
+    contours = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = contours[0] if len(contours) == 2 else contours[1]
+    ret_img = cv2.drawContours(image, contours, -1, (255, 0, 0), thickness=1)
+    return ret_img
+
 if (__name__ == "__main__"):
     # compute scores for all images
     gt_names = sorted(os.listdir(ts_gt_path))
@@ -175,6 +187,29 @@ if (__name__ == "__main__"):
         finetuned_jaccard += get_jaccard_score(ft_seg, gt)
         def_dice += get_dice_score(def_seg, gt[None, :, :])
         def_jaccard += get_jaccard_score(def_seg, gt[None, :, :])
+        # save image
+        fig, axs = plt.subplots(2, 2)
+        axs[0, 0].imshow(im)
+        axs[0, 0].set_title("Original Image")
+        axs[0, 0].axis("off")
+
+        gt_ct = get_mask_contours(gt, im)
+        axs[0, 1].imshow(gt_ct)
+        axs[0, 1].set_title("Ground Truth Mask")
+        axs[0, 1].axis("off")
+
+        def_ct = get_mask_contours(def_seg[0].astype(np.uint8), im)
+        axs[1, 0].imshow(def_ct)
+        axs[1, 0].set_title("Default ViT-B Model Segmentation")
+        axs[1, 0].axis("off")
+
+        ft_ct = get_mask_contours(ft_seg[0].astype(np.uint8), im)
+        axs[1, 1].imshow(ft_ct)
+        axs[1, 1].set_title("Finetuned Model Segmentation")
+        axs[1, 1].axis("off")
+
+        fig.tight_layout()
+        plt.savefig(f"/scratch/st-tklee-1/ndsz/output/{gt_path.split('/')[-1].split('.')[0]}_comparision.png")
     # create masks for all images
     def_dice /= len(gt_names)
     def_jaccard /= len(gt_names)
