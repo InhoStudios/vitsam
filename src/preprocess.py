@@ -38,32 +38,24 @@ sam_model = sam_model_registry[model_type](checkpoint=checkpoint).to(device)
 
 def augment(image, ground_truth):
     num_img = 0
-    for i in range(20):
-        # random rotation
-        im, gt = ran_scale(image, ground_truth)
-        # random flipping
-        for j in range(20):
-            im, gt = ran_flip(im, gt)
-            # random rotation
-            for k in range(20):
-                im, gt = ran_rotate(im, gt)
-                # random cropping
-                l = 0
-                while l < 20:
-                    if (np.sum(gt) < 100):
-                        i -= 1
-                        j -= 1
-                        k -= 1
+    remixes_per_iter = 6
+    for i in range(remixes_per_iter):
+        im_scale, gt_scale = ran_scale(image, ground_truth)
+        for j in range(remixes_per_iter):
+            im_flip, gt_flip = ran_flip(im_scale, gt_scale)
+            for k in range(remixes_per_iter):
+                im_rot, gt_rot = ran_rotate(im_flip, gt_flip)
+                for l in range(remixes_per_iter):
+                    if (np.count_nonzero(gt_rot) < 100):
+                        print("mask too small")
+                        break
+                    im_crop, gt_crop = ran_crop(im_rot, gt_rot)
+                    if (np.count_nonzero(gt_crop) < 100):
                         continue
-                    im, gt = ran_crop(im, gt)
-                    if (np.sum(gt) < 100):
-                        # print("Not enough mask pixels (", np.sum(gt), "), resetting to", l)
-                        continue
-                    print(f"Substantial pixels {np.sum(gt)}: processing")
                     try:
                         # ensure training images are the right size, rescale if necessary
                         im = transform.resize(
-                            im,
+                            im_crop,
                             (image_size, image_size),
                             order=3,
                             preserve_range=True,
@@ -71,7 +63,7 @@ def augment(image, ground_truth):
                             anti_aliasing=True
                         )
                         gt = transform.resize(
-                            gt == label_id,
+                            gt_crop == label_id,
                             (image_size, image_size),
                             order=0,
                             preserve_range=True,
@@ -96,14 +88,14 @@ def augment(image, ground_truth):
                             sam_model.image_encoder.img_size,
                         ), "input image should be resized by 1024 * 1024"
 
-                        imgs.append(im)
-                        gts.append(gt)
-                        num_img += 1
-                        l += 1
+                        if (np.count_nonzero(gt) > 100):
+                            imgs.append(im)
+                            gts.append(gt)
+                            num_img += 1
 
-                        with torch.no_grad():
-                            embedding = sam_model.image_encoder(input_image)
-                            img_embeddings.append(embedding.cpu().numpy()[0])
+                            with torch.no_grad():
+                                embedding = sam_model.image_encoder(input_image)
+                                img_embeddings.append(embedding.cpu().numpy()[0])
                     except Exception as e:
                         print(e)
                         continue;
@@ -160,8 +152,18 @@ def ran_scale(image, ground_truth):
 def ran_crop(image, ground_truth):
     if (image.shape[0] < image_size or image.shape[1] < image_size):
         return image, ground_truth
-    yy = random.randint(0, image.shape[0] - image_size)
-    xx = random.randint(0, image.shape[1] - image_size)
+    y_true, x_true = np.where(ground_truth > 0)
+    y_cent = np.average(y_true)
+    x_cent = np.average(x_true)
+    if (np.isnan(y_cent) or np.isnan(x_cent)):
+        return image, ground_truth
+
+    yy = np.random.randint(y_cent - 128, y_cent + 128)
+    xx = np.random.randint(x_cent - 128, x_cent + 128)
+
+    yy = max(0, min(image.shape[0] - image_size - 1, yy))
+    xx = max(0, min(image.shape[1] - image_size - 1, xx))
+
     ey = yy + image_size
     ex = xx + image_size
 

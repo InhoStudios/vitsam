@@ -23,7 +23,7 @@ torch.manual_seed(2023)
 np.random.seed(2023)
 
 # test dataset class and dataloader
-val_npz = "../data/processed_npz_vit_b"
+val_npz = "../data/processed_npz_vit_b/"
 val_dataset = NpzDataset(val_npz)
 val_dataloader = DataLoader(val_dataset, batch_size=4, shuffle=True)
 

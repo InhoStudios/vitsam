@@ -19,8 +19,8 @@ from npzdataset import NpzDataset
 from skimage import io, transform
 import cv2
 
-torch.manual_seed(2023)
-np.random.seed(2023)
+# torch.manual_seed(2023)
+# np.random.seed(2023)
 
 # GET DICE LOSS COEFF
 seg_loss = monai.losses.DiceLoss(sigmoid=True, squared_pred=True, reduction='mean')
@@ -28,7 +28,7 @@ seg_loss = monai.losses.DiceLoss(sigmoid=True, squared_pred=True, reduction='mea
 # CONSTANTS
 model_type = "vit_b"
 checkpoint = "../data/sam_vit_b_01ec64.pth"
-finetuned_checkpoint="../model/vitsam/sam_model_best.pth"
+finetuned_checkpoint="../model/vitsam/minor_finetuned_sam_model_best.pth"
 device = "cuda"
 
 ts_img_path ="../data/training_images/test/images"
@@ -152,15 +152,16 @@ def predict_image(image, mask):
     return default_seg, medsam_seg
 
 def get_dice_score(pred_mask, ground_truth):
-    seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
-    print(pred_mask.shape, ground_truth.shape)
-    loss = seg_loss(torch.tensor(pred_mask).float(), torch.tensor(ground_truth).float())
-    return loss.item()
+    intersect = np.sum(pred_mask * ground_truth)
+    total_sum = np.sum(pred_mask) + np.sum(ground_truth)
+    dice = np.mean(2 * intersect / total_sum)
+    return round(dice, 3)
 
 def get_jaccard_score(pred_mask, ground_truth):
-    seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean', jaccard=True)
-    loss = seg_loss(torch.tensor(pred_mask).float(), torch.tensor(ground_truth).float())
-    return loss.item()
+    intersect = np.sum(pred_mask * ground_truth)
+    union = np.sum(pred_mask) + np.sum(ground_truth) - intersect
+    iou = np.mean(intersect / union)
+    return round(iou, 3)
 
 def get_mask_contours(mask, image):
     print(type(mask), mask.shape)
@@ -185,8 +186,8 @@ if (__name__ == "__main__"):
         def_seg, ft_seg = predict_image(im, gt)
         finetuned_dice += get_dice_score(ft_seg, gt)
         finetuned_jaccard += get_jaccard_score(ft_seg, gt)
-        def_dice += get_dice_score(def_seg, gt[None, :, :])
-        def_jaccard += get_jaccard_score(def_seg, gt[None, :, :])
+        def_dice += get_dice_score(def_seg[0], gt)
+        def_jaccard += get_jaccard_score(def_seg[0], gt)
         # save image
         fig, axs = plt.subplots(2, 2)
         axs[0, 0].imshow(im)
