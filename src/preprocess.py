@@ -12,9 +12,9 @@ import torch
 from segment_anything import sam_model_registry
 from segment_anything.utils.transforms import ResizeLongestSide
 
-imgs = []
-gts = []
-img_embeddings = []
+# imgs = []
+# gts = []
+# img_embeddings = []
 
 # set up global variables
 img_path = "../data/training_images/train/images"
@@ -36,9 +36,9 @@ seed = 2023
 
 sam_model = sam_model_registry[model_type](checkpoint=checkpoint).to(device)
 
-def augment(image, ground_truth):
+def augment(image, ground_truth, images, ground_truths, embeddings):
     num_img = 0
-    remixes_per_iter = 6
+    remixes_per_iter = 7
     for i in range(remixes_per_iter):
         im_scale, gt_scale = ran_scale(image, ground_truth)
         for j in range(remixes_per_iter):
@@ -89,18 +89,19 @@ def augment(image, ground_truth):
                         ), "input image should be resized by 1024 * 1024"
 
                         if (np.count_nonzero(gt) > 100):
-                            imgs.append(im)
-                            gts.append(gt)
+                            images.append(im)
+                            ground_truths.append(gt)
                             num_img += 1
 
                             with torch.no_grad():
                                 embedding = sam_model.image_encoder(input_image)
-                                img_embeddings.append(embedding.cpu().numpy()[0])
+                                embeddings.append(embedding.cpu().numpy()[0])
                     except Exception as e:
                         print(e)
                         continue;
                     
         print(f"Batch {i} complete, total images so far: {num_img}")
+    return images, ground_truths, embeddings
 
 def ran_flip(image, ground_truth):
     choice = [1, -1]
@@ -170,8 +171,13 @@ def ran_crop(image, ground_truth):
     return image[yy:ey, xx:ex, :], ground_truth[yy:ey, xx:ex]
     
 def process(gt_name: str, image_name: str):
+    fname = gt_name.split(".")[0]
+    images = []
+    ground_truths = []
+    embeddings = []
+
     if image_name == None:
-        image_name = gt_name.split(".")[0] + image_name_suffix
+        image_name = fname + image_name_suffix
     ori_gt_data = io.imread(join(gt_path, gt_name))
 
     # if the mask is RGB, select the first channel
@@ -223,11 +229,11 @@ def process(gt_name: str, image_name: str):
         )
         image_data = np.uint8(image_data)
 
-        imgs.append(image_data)
+        images.append(image_data)
 
         assert np.sum(gt_data) > 100, "ground truth should have more than 100 pixels"
 
-        gts.append(gt_data)
+        ground_truths.append(gt_data)
 
         sam_transform = ResizeLongestSide(sam_model.image_encoder.img_size)
         resize_img = sam_transform.apply_image(image_data)
@@ -246,44 +252,71 @@ def process(gt_name: str, image_name: str):
 
         with torch.no_grad():
             embedding = sam_model.image_encoder(input_image)
-            img_embeddings.append(embedding.cpu().numpy()[0])
+            embeddings.append(embedding.cpu().numpy()[0])
         
-        augment(ori_image_data, ori_gt_data)
+        images, ground_truths, embeddings = augment(ori_image_data, ori_gt_data, images, ground_truths, embeddings)
+
+        save_im_gt_emb_as_npz(fname, images, ground_truths, embeddings)
     return
 
-def preprocess_and_save(imgs, gts, img_embeddings):
+def save_im_gt_emb_as_npz(filename, images, ground_truths, embeddings):
+    save_path = npz_path + "_" + model_type
+    os.makedirs(save_path, exist_ok=True)
+
+    print("num images: ", len(images))
+
+    if (len(images) > 1):
+        images = np.stack(images, axis=0)
+        ground_truths = np.stack(ground_truths, axis=0)
+        embeddings = np.stack(embeddings, axis=0)
+
+        np.savez_compressed(
+            join(save_path, filename + ".npz"),
+            imgs=images,
+            gts=ground_truths,
+            img_embeddings=embeddings
+        )
+        # save example image for sanity check
+        idx = np.random.randint(images.shape[0])
+        img_idx = images[idx, :, :, :]
+        gt_idx = ground_truths[idx, :, :]
+        bd = segmentation.find_boundaries(gt_idx, mode="inner")
+        img_idx[bd, :] = (255, 0, 0)
+        io.imsave(save_path + filename + ".png", img_idx, check_contrast=False)
+
+def preprocess_and_save():
     names = sorted(os.listdir(gt_path))
     print("image number:", len(names))
     for gt_name in tqdm(names):
         process(gt_name, None)
 
-    save_path = npz_path + "_" + model_type
-    os.makedirs(save_path, exist_ok=True)
+    # save_path = npz_path + "_" + model_type
+    # os.makedirs(save_path, exist_ok=True)
 
-    # save images as one npz file
-    print("num images: ", len(imgs))
+    # # save images as one npz file
+    # print("num images: ", len(imgs))
 
-    if (len(imgs) > 1):
-        imgs = np.stack(imgs, axis=0)
-        gts = np.stack(gts, axis=0)
+    # if (len(imgs) > 1):
+    #     imgs = np.stack(imgs, axis=0)
+    #     gts = np.stack(gts, axis=0)
 
-        img_embeddings = np.stack(img_embeddings, axis=0)
+    #     img_embeddings = np.stack(img_embeddings, axis=0)
 
-        np.savez_compressed(
-            join(save_path, data_name + ".npz"),
-            imgs=imgs,
-            gts=gts,
-            img_embeddings=img_embeddings,
-        )
-        # save example image for sanity check
-        idx = np.random.randint(imgs.shape[0])
-        img_idx = imgs[idx, :, :, :]
-        gt_idx = gts[idx, :, :]
-        bd = segmentation.find_boundaries(gt_idx, mode="inner")
-        img_idx[bd, :] = (255, 0, 0)
-        io.imsave(save_path + ".png", img_idx, check_contrast=False)
+    #     np.savez_compressed(
+    #         join(save_path, data_name + ".npz"),
+    #         imgs=imgs,
+    #         gts=gts,
+    #         img_embeddings=img_embeddings,
+    #     )
+    #     # save example image for sanity check
+    #     idx = np.random.randint(imgs.shape[0])
+    #     img_idx = imgs[idx, :, :, :]
+    #     gt_idx = gts[idx, :, :]
+    #     bd = segmentation.find_boundaries(gt_idx, mode="inner")
+    #     img_idx[bd, :] = (255, 0, 0)
+    #     io.imsave(save_path + ".png", img_idx, check_contrast=False)
     
-    return imgs, gts, img_embeddings
+    # return imgs, gts, img_embeddings
 
 if (__name__ == "__main__"):
-    preprocess_and_save(imgs, gts, img_embeddings)
+    preprocess_and_save()

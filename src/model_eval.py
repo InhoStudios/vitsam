@@ -16,7 +16,7 @@ from segment_anything.utils.transforms import ResizeLongestSide
 from utils.SurfaceDice import compute_dice_coefficient
 from npzdataset import NpzDataset
 
-from skimage import io, transform
+from skimage import io, transform, segmentation
 import cv2
 
 # torch.manual_seed(2023)
@@ -33,6 +33,8 @@ device = "cuda"
 
 ts_img_path ="../data/training_images/test/images"
 ts_gt_path = "../data/training_images/test/labels"
+
+output_dir = "/scratch/st-tklee-1/ndsz/output"
 
 image_name_suffix = ".jpg"
 label_name_suffix = ".png"
@@ -164,14 +166,9 @@ def get_jaccard_score(pred_mask, ground_truth):
     return round(iou, 3)
 
 def get_mask_contours(mask, image):
-    print(type(mask), mask.shape)
-    print(mask.dtype)
-
-    mask = mask.astype(np.uint8)
-
-    contours = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours = contours[0] if len(contours) == 2 else contours[1]
-    ret_img = cv2.drawContours(image, contours, -1, (255, 0, 0), thickness=1)
+    ret_img = image.copy()
+    bd = segmentation.find_boundaries(mask, mode="inner")
+    ret_img[bd, :] = (255, 0, 0)
     return ret_img
 
 if (__name__ == "__main__"):
@@ -203,14 +200,16 @@ if (__name__ == "__main__"):
         axs[1, 0].imshow(def_ct)
         axs[1, 0].set_title("Default ViT-B Model Segmentation")
         axs[1, 0].axis("off")
+        cv2.imwrite(join(output_dir, f"{gt_path.split('/')[-1].split('.')[0]}_default_seg.png"), (255 * def_seg[0]).astype(np.uint8))
 
-        ft_ct = get_mask_contours(ft_seg[0].astype(np.uint8), im)
+        ft_ct = get_mask_contours(ft_seg.astype(np.uint8), im)
         axs[1, 1].imshow(ft_ct)
         axs[1, 1].set_title("Finetuned Model Segmentation")
         axs[1, 1].axis("off")
+        cv2.imwrite(join(output_dir, f"{gt_path.split('/')[-1].split('.')[0]}_finetuned_seg.png"), (255 * ft_seg).astype(np.uint8))
 
         fig.tight_layout()
-        plt.savefig(f"/scratch/st-tklee-1/ndsz/output/{gt_path.split('/')[-1].split('.')[0]}_comparision.png")
+        plt.savefig(join(output_dir, f"{gt_path.split('/')[-1].split('.')[0]}_comparision.png"))
     # create masks for all images
     def_dice /= len(gt_names)
     def_jaccard /= len(gt_names)
