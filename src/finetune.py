@@ -19,8 +19,8 @@ from segment_anything.utils.transforms import ResizeLongestSide
 from utils.SurfaceDice import compute_dice_coefficient
 from npzdataset import NpzDataset
 
-torch.manual_seed(2023)
-np.random.seed(2023)
+# torch.manual_seed(2023)
+# np.random.seed(2023)
 
 # test dataset class and dataloader
 val_npz = "../data/processed_npz_vit_b/"
@@ -75,8 +75,6 @@ for epoch in range(num_epochs):
                 masks=None
             )
 
-            print(sparse_embeddings.shape, dense_embeddings.shape)
-
         # predicted masks
         mask_predictions, _ = sam_model.mask_decoder(
             image_embeddings=image_embedding.to(device),
@@ -128,7 +126,7 @@ for epoch in range(num_epochs):
     # save latest model checkpoint
     torch.save(sam_model.state_dict(), join(model_save_path, 'sam_model_latest.pth'))
     # save best model
-    if epoch_loss < best_loss:
+    if val_loss < best_loss:
         best_loss = epoch_loss
         torch.save(sam_model.state_dict(), join(model_save_path, 'sam_model_best.pth'))
 
