@@ -28,7 +28,7 @@ seg_loss = monai.losses.DiceLoss(sigmoid=True, squared_pred=True, reduction='mea
 # CONSTANTS
 model_type = "vit_b"
 checkpoint = "../data/sam_vit_b_01ec64.pth"
-finetuned_checkpoint="../model/vitsam/sam_model_best.pth"
+finetuned_checkpoint="../model/vitsam/minor_finetuned_sam_model_best.pth"
 device = "cuda"
 
 ts_img_path ="../data/training_images/test/images"

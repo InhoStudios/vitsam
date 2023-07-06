@@ -50,10 +50,13 @@ optimizer = torch.optim.Adam(sam_model.mask_decoder.parameters(), lr=1e-5, weigh
 seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
 
 # train the model
-num_epochs = 100
+num_epochs = 300
 losses = []
 val_losses = []
 best_loss = 1e10
+relative_tolerance = 0.9
+early_stopping_epochs = 30
+epochs_since_opt_loss = 0
 train_dataset = NpzDataset(npz_tr_path)
 train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 for epoch in range(num_epochs):
@@ -126,9 +129,16 @@ for epoch in range(num_epochs):
     # save latest model checkpoint
     torch.save(sam_model.state_dict(), join(model_save_path, 'sam_model_latest.pth'))
     # save best model
-    if val_loss < best_loss:
+    if val_loss < relative_tolerance * best_loss:
         best_loss = epoch_loss
+        epochs_since_opt_loss = 0
         torch.save(sam_model.state_dict(), join(model_save_path, 'sam_model_best.pth'))
+    else:
+        epochs_since_opt_loss += 1
+    
+    if epochs_since_opt_loss > early_stopping_epochs:
+        break
+
 
 # plot the loss
 plt.plot(losses, label="Training Loss")
