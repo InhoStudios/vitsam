@@ -25,21 +25,11 @@ from npzdataset import NpzDataset, MultispaceDataset
 # test dataset class and dataloader
 val_npz = "../data/multispace/"
 
-dataset_filepath = "../data/multispace/"
+dataset_filepath = "../data/multispace_vit_b/"
 rgb_dataset = MultispaceDataset(dataset_filepath, is_hsv=False)
 hsv_dataset = MultispaceDataset(dataset_filepath, is_hsv=True)
 rgb_train, rgb_val = random_split(rgb_dataset, [np.floor(0.75 * len(rgb_dataset)), np.ceil(0.25 * len(rgb_dataset))])
 hsv_train, hsv_val = random_split(hsv_dataset, [np.floor(0.75 * len(hsv_dataset)), np.ceil(0.25 * len(hsv_dataset))])
-
-########## TODO: REMOVE
-
-val_dataset = MultispaceDataset(val_npz, is_hsv=False)
-val_dataloader = DataLoader(val_dataset, batch_size=4, shuffle=True)
-
-for img_embed, gt2D, bboxes in val_dataloader:
-    # img_embed: (B, 256, 64, 64), gt2D: (B, 1, 256, 256), bboxes: (B, 4)
-    print(f"{img_embed.shape=}, {gt2D.shape=}, {bboxes.shape=}")
-    break
 
 
 # set up model for fine-tuning
@@ -50,12 +40,17 @@ task_name = "vitsam"
 model_type = "vit_b"
 checkpoint = "../data/sam_vit_b_01ec64.pth"
 device = "cuda"
+
+
 model_save_path = join(work_dir, task_name)
+
 os.makedirs(model_save_path, exist_ok=True)
-sam_model = sam_model_registry[model_type](checkpoint=checkpoint).to(device)
-sam_model.train()
+
+rgb_sam_model = sam_model_registry[model_type](checkpoint=checkpoint).to(device)
+rgb_sam_model.train()
+
 # set up optimizer, hyperparameter tuning will improve performance here
-optimizer = torch.optim.Adam(sam_model.mask_decoder.parameters(), lr=1e-5, weight_decay=0)
+optimizer = torch.optim.Adam(rgb_sam_model.mask_decoder.parameters(), lr=1e-5, weight_decay=0)
 seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
 
 # train the model
@@ -66,31 +61,47 @@ best_loss = 1e10
 relative_tolerance = 0.9
 early_stopping_epochs = 30
 epochs_since_opt_loss = 0
+
+rgb_train_dataloader = DataLoader(rgb_train, batch_size=48, shuffle=True)
+rgb_val_dataloader = DataLoader(rgb_val, batch_size=16, shuffle=True)
+
+hsv_train_dataloader = DataLoader(hsv_train, batch_size=48, shuffle=True)
+hsv_val_dataloader = DataLoader(hsv_val, batch_size=16, shuffle=True)
+
 train_dataset = NpzDataset(npz_tr_path)
 train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+
+# TODO: repeat training step for HSV and RGB dataset
+# TODO: change val_dataloader to rgb_val_dataloader
+# TODO: repeat continue from here
+# TODO: plot two plots
+
 for epoch in range(num_epochs):
-    epoch_loss = 0
-    val_loss = 0
-    # train
+    rgb_epoch_loss = 0
+    rgb_val_loss = 0
+    hsv_epoch_loss = 0
+    hsv_val_loss = 0
+
+    # train RGB
     for step, (image_embedding, gt2D, boxes) in enumerate(tqdm(train_dataloader)):
         with torch.no_grad():
             box_np = boxes.numpy()
-            sam_trans = ResizeLongestSide(sam_model.image_encoder.img_size)
+            sam_trans = ResizeLongestSide(rgb_sam_model.image_encoder.img_size)
             box = sam_trans.apply_boxes(box_np, (gt2D.shape[-2], gt2D.shape[-1]))
             box_torch = torch.as_tensor(box, dtype=torch.float, device=device)
             if (len(box_torch.shape) == 2):
                 box_torch = box_torch[:, None, :]
             # get prompt embeddings
-            sparse_embeddings, dense_embeddings = sam_model.prompt_encoder(
+            sparse_embeddings, dense_embeddings = rgb_sam_model.prompt_encoder(
                 points=None,
                 boxes=box_torch,
                 masks=None
             )
 
         # predicted masks
-        mask_predictions, _ = sam_model.mask_decoder(
+        mask_predictions, _ = rgb_sam_model.mask_decoder(
             image_embeddings=image_embedding.to(device),
-            image_pe=sam_model.prompt_encoder.get_dense_pe(),
+            image_pe=rgb_sam_model.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
             multimask_output=False,
@@ -100,18 +111,18 @@ for epoch in range(num_epochs):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        epoch_loss += loss.item()
+        rgb_epoch_loss += loss.item()
     
-    # validate
+    # validate RGB
     for step, (val_img_embedding, val_gt2D, val_boxes) in enumerate(tqdm(val_dataloader)):
         box_np = val_boxes.numpy()
-        sam_trans = ResizeLongestSide(sam_model.image_encoder.img_size)
+        sam_trans = ResizeLongestSide(rgb_sam_model.image_encoder.img_size)
         box = sam_trans.apply_boxes(box_np, (val_gt2D.shape[-2], val_gt2D.shape[-1]))
         box_torch = torch.as_tensor(box, dtype=torch.float, device=device)
         if (len(box_torch.shape) == 2):
             box_torch = box_torch[:, None, :]
         # get prompt embeddings
-        sparse_embeddings, dense_embeddings = sam_model.prompt_encoder(
+        sparse_embeddings, dense_embeddings = rgb_sam_model.prompt_encoder(
             points=None,
             boxes=box_torch,
             masks=None
@@ -119,29 +130,29 @@ for epoch in range(num_epochs):
 
         print(sparse_embeddings.shape, dense_embeddings.shape)
 
-        mask_predictions, _ = sam_model.mask_decoder(
+        mask_predictions, _ = rgb_sam_model.mask_decoder(
             image_embeddings=val_img_embedding.to(device),
-            image_pe=sam_model.prompt_encoder.get_dense_pe(),
+            image_pe=rgb_sam_model.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
             multimask_output=False,
         )
         vloss = seg_loss(mask_predictions, val_gt2D.to(device))
-        val_loss += loss.item()
+        rgb_val_loss += loss.item()
 
     if (step != 0):
-        epoch_loss /= step
-        val_loss /= step
-    losses.append(epoch_loss)
-    val_losses.append(val_loss)
-    print(f'EPOCH: {epoch}, Training Loss: {epoch_loss}, Validation Loss: {val_loss}')
+        rgb_epoch_loss /= step
+        rgb_val_loss /= step
+    losses.append(rgb_epoch_loss)
+    val_losses.append(rgb_val_loss)
+    print(f'EPOCH: {epoch}, Training Loss: {rgb_epoch_loss}, Validation Loss: {rgb_val_loss}')
     # save latest model checkpoint
-    torch.save(sam_model.state_dict(), join(model_save_path, 'sam_model_latest.pth'))
+    torch.save(rgb_sam_model.state_dict(), join(model_save_path, 'sam_model_latest.pth'))
     # save best model
-    if val_loss < relative_tolerance * best_loss:
-        best_loss = epoch_loss
+    if rgb_val_loss < relative_tolerance * best_loss:
+        best_loss = rgb_epoch_loss
         epochs_since_opt_loss = 0
-        torch.save(sam_model.state_dict(), join(model_save_path, 'sam_model_best.pth'))
+        torch.save(rgb_sam_model.state_dict(), join(model_save_path, 'sam_model_best.pth'))
     else:
         epochs_since_opt_loss += 1
     
