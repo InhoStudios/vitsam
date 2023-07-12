@@ -6,7 +6,7 @@ import pandas as pd
 import random
 
 from os.path import join
-from skimage import transform, io, segmentation
+from skimage import transform, io, segmentation, color
 from tqdm import tqdm
 import torch
 from segment_anything import sam_model_registry
@@ -68,14 +68,20 @@ def augment(image, ground_truth, images, ground_truths, embeddings):
             )
             # change data type
             im = np.uint8(im)
+            hsv = np.uint8(color.rgb2hsv(im))
             gt = np.uint8(gt)
 
             sam_transform = ResizeLongestSide(sam_model.image_encoder.img_size)
             resize_img = sam_transform.apply_image(im)
+            resize_hsv = sam_transform.apply_image(hsv)
             resize_img_tensor = torch.as_tensor(resize_img.transpose(2, 0, 1)).to(device)
+            resize_hsv_tensor = torch.as_tensor(resize_hsv.transpose(2, 0, 1)).to(device)
             
             input_image = sam_model.preprocess(
                 resize_img_tensor[None, :, :, :]
+            )
+            input_hsv = sam_model.preprocess(
+                resize_hsv_tensor[None, :, :, :]
             )
 
             assert input_image.shape == (
@@ -85,14 +91,25 @@ def augment(image, ground_truth, images, ground_truths, embeddings):
                 sam_model.image_encoder.img_size,
             ), "input image should be resized by 1024 * 1024"
 
+            assert input_hsv.shape == (
+                1,
+                3,
+                sam_model.image_encoder.img_size,
+                sam_model.image_encoder.img_size,
+            ), "input image should be resized by 1024 * 1024"
+
             if (np.count_nonzero(gt) > 100):
                 images.append(im)
+                ground_truths.append(gt)
+                images.append(hsv)
                 ground_truths.append(gt)
                 num_img += 1
 
                 with torch.no_grad():
                     embedding = sam_model.image_encoder(input_image)
+                    hsv_embedding = sam_model.image_encoder(input_hsv)
                     embeddings.append(embedding.cpu().numpy()[0])
+                    embeddings.append(hsv_embedding.cpu().numpy()[0])
         except Exception as e:
             print(e)
             continue
@@ -225,19 +242,29 @@ def process(gt_name: str, image_name: str):
             anti_aliasing=True
         )
         image_data = np.uint8(image_data)
+        hsv_image = np.uint8(color.rgb2hsv(image_data))
 
         images.append(image_data)
+        images.append(hsv_image)
 
         assert np.sum(gt_data) > 100, "ground truth should have more than 100 pixels"
 
+        ground_truths.append(gt_data)
         ground_truths.append(gt_data)
 
         sam_transform = ResizeLongestSide(sam_model.image_encoder.img_size)
         resize_img = sam_transform.apply_image(image_data)
         resize_img_tensor = torch.as_tensor(resize_img.transpose(2, 0, 1)).to(device)
 
+        resize_hsv = sam_transform.apply_image(hsv_image)
+        resize_hsv_tensor = torch.as_tensor(resize_hsv.transpose(2, 0, 1)).to(device)
+
         input_image = sam_model.preprocess(
             resize_img_tensor[None, :, :, :]
+        )
+
+        input_hsv = sam_model.preprocess(
+            resize_hsv_tensor[None, :, :, :]
         )
 
         assert input_image.shape == (
@@ -247,9 +274,18 @@ def process(gt_name: str, image_name: str):
             sam_model.image_encoder.img_size,
         ), "input image should be resized by 1024 * 1024"
 
+        assert input_hsv.shape == (
+            1,
+            3,
+            sam_model.image_encoder.img_size,
+            sam_model.image_encoder.img_size,
+        ), "input image should be resized by 1024 * 1024"
+
         with torch.no_grad():
             embedding = sam_model.image_encoder(input_image)
+            hsv_embedding = sam_model.image_encoder(input_hsv)
             embeddings.append(embedding.cpu().numpy()[0])
+            embeddings.append(hsv_embedding.cpu().numpy()[0])
         
         images, ground_truths, embeddings = augment(ori_image_data, ori_gt_data, images, ground_truths, embeddings)
 

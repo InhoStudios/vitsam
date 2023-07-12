@@ -16,7 +16,7 @@ from segment_anything.utils.transforms import ResizeLongestSide
 from utils.SurfaceDice import compute_dice_coefficient
 from npzdataset import NpzDataset
 
-from skimage import io, transform, segmentation
+from skimage import io, transform, segmentation, color
 import cv2
 
 # torch.manual_seed(2023)
@@ -112,19 +112,25 @@ def get_clean_image_gt_pair(gt_name: str, image_name: str):
     return im_data, gt_data
 
 def predict_image(image, mask):
+    hsv = np.uint8(color.rgb2hsv(image))
+    
     default_sam_predictor.set_image(image)
     bbox_raw = get_bbox_from_mask(mask)
     default_seg, _, _ = default_sam_predictor.predict(point_coords = None, box=bbox_raw, multimask_output=False)
 
     sam_transform = ResizeLongestSide(finetuned_sam.image_encoder.img_size)
     resize_im = sam_transform.apply_image(image)
+    resize_hsv = sam_transform.apply_image(hsv)
     resize_im_tensor = torch.as_tensor(resize_im.transpose(2, 0, 1)).to(device)
+    resize_hsv_tensor = torch.as_tensor(resize_hsv.transpose(2, 0, 1)).to(device)
     input_im = finetuned_sam.preprocess(resize_im_tensor[None,:,:,:])
+    input_hsv = finetuned_sam.preprocess(resize_hsv_tensor[None, :, :, :])
 
     H, W, _ = image.shape
 
     with torch.no_grad():
         ts_img_embedding = finetuned_sam.image_encoder(input_im)
+        ts_hsv_embedding = finetuned_sam.image_encoder(input_hsv)
         bbox = sam_transform.apply_boxes(bbox_raw, (H, W))
 
         box_torch = torch.as_tensor(bbox, dtype=torch.float, device=device)
@@ -146,12 +152,24 @@ def predict_image(image, mask):
             multimask_output=False,
         )
 
+        medsam_seg_prob_hsv, _ = finetuned_sam.mask_decoder(
+            image_embeddings=ts_hsv_embedding.to(device),
+            image_pe=finetuned_sam.prompt_encoder.get_dense_pe(),
+            sparse_prompt_embeddings=sparse_embeddings,
+            dense_prompt_embeddings=dense_embeddings,
+            multimask_output=False
+        )
+
         medsam_seg_prob = torch.sigmoid(medsam_seg_prob)
+        medsam_seg_prob_hsv = torch.sigmoid(medsam_seg_prob_hsv)
 
         medsam_seg_prob = medsam_seg_prob.cpu().numpy().squeeze()
+        medsam_seg_prob_hsv = medsam_seg_prob_hsv.cpu().numpy().squeeze()
+        total_prob = 0.5 * medsam_seg_prob + 0.5 * medsam_seg_prob_hsv
         medsam_seg = (medsam_seg_prob > 0.5).astype(np.uint8)
+        combined_seg = (total_prob > 0.5).astype(np.uint8)
     
-    return default_seg, medsam_seg
+    return default_seg, medsam_seg, combined_seg
 
 def get_dice_score(pred_mask, ground_truth):
     intersect = np.sum(pred_mask * ground_truth)
@@ -176,13 +194,17 @@ if (__name__ == "__main__"):
     gt_names = sorted(os.listdir(ts_gt_path))
     finetuned_dice = 0
     finetuned_jaccard = 0
+    combined_dice = 0
+    combined_jaccard = 0
     def_dice = 0
     def_jaccard = 0
     for gt_path in gt_names:
         im, gt = get_clean_image_gt_pair(gt_path, None)
-        def_seg, ft_seg = predict_image(im, gt)
+        def_seg, ft_seg, c_seg = predict_image(im, gt)
         finetuned_dice += get_dice_score(ft_seg, gt)
+        combined_dice += get_dice_score(c_seg, gt)
         finetuned_jaccard += get_jaccard_score(ft_seg, gt)
+        combined_jaccard += get_jaccard_score(c_seg, gt)
         def_dice += get_dice_score(def_seg[0], gt)
         def_jaccard += get_jaccard_score(def_seg[0], gt)
         # save image
@@ -191,16 +213,22 @@ if (__name__ == "__main__"):
         axs[0, 0].set_title("Original Image")
         axs[0, 0].axis("off")
 
-        gt_ct = get_mask_contours(gt, im)
-        axs[0, 1].imshow(gt_ct)
-        axs[0, 1].set_title("Ground Truth Mask")
-        axs[0, 1].axis("off")
+        # gt_ct = get_mask_contours(gt, im)
+        # axs[0, 1].imshow(gt_ct)
+        # axs[0, 1].set_title("Ground Truth Mask")
+        # axs[0, 1].axis("off")
 
         def_ct = get_mask_contours(def_seg[0].astype(np.uint8), im)
-        axs[1, 0].imshow(def_ct)
-        axs[1, 0].set_title("Default ViT-B Model Segmentation")
-        axs[1, 0].axis("off")
+        axs[0, 1].imshow(def_ct)
+        axs[0, 1].set_title("Default ViT-B Model Segmentation")
+        axs[0, 1].axis("off")
         cv2.imwrite(join(output_dir, f"{gt_path.split('/')[-1].split('.')[0]}_default_seg.png"), (255 * def_seg[0]).astype(np.uint8))
+
+        comb_ct = get_mask_contours(c_seg.astype(np.uint8), im)
+        axs[1, 0].imshow(comb_ct)
+        axs[1, 0].set_title("Multi-space segmentation")
+        axs[1, 0].axis("off")
+        cv2.imwrite(join(output_dir, f"{gt_path.split('/')[-1].split('.')[0]}_combined_seg.png"), (255 * c_seg).astype(np.uint8))
 
         ft_ct = get_mask_contours(ft_seg.astype(np.uint8), im)
         axs[1, 1].imshow(ft_ct)
@@ -215,7 +243,10 @@ if (__name__ == "__main__"):
     def_jaccard /= len(gt_names)
     finetuned_dice /= len(gt_names)
     finetuned_jaccard /= len(gt_names)
+    combined_dice /= len(gt_names)
+    combined_jaccard /= len(gt_names)
     
     print(f"For all test and train images: \n",
         f"Default ViT-B Model: {def_jaccard} (Jaccard), {def_dice} (Dice)\n",
-        f"Finetuned: {finetuned_jaccard} (Jaccard), {finetuned_dice} (Dice)")
+        f"Finetuned: {finetuned_jaccard} (Jaccard), {finetuned_dice} (Dice)\n",
+        f"Combined: {combined_jaccard} (Jaccard), {combined_dice} (Dice)")
